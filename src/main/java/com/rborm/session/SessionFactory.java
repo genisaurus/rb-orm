@@ -45,23 +45,18 @@ public class SessionFactory {
 		}
 	}
 
-	public SessionFactory(File propsFile) {
+	public SessionFactory(File propsFile) throws FileNotFoundException, IOException {
 		this(convert(propsFile));
 	}
 
-	public SessionFactory(String propsPath) {
+	public SessionFactory(String propsPath) throws FileNotFoundException, IOException {
 		this(new File(propsPath));
 	}
 
-	private static Properties convert(File propsFile) {
+	private static Properties convert(File propsFile) throws FileNotFoundException, IOException {
 		Properties props = new Properties();
-		try {
-			props.load(new FileInputStream(propsFile));
-		} catch (FileNotFoundException e) {
-			e.printStackTrace();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
+		props.load(new FileInputStream(propsFile));
+
 		return props;
 	}
 	
@@ -87,15 +82,10 @@ public class SessionFactory {
 			throw new PropertiesException("Missing property: " + PropertyNames.PASSWORD);
 	}
 
-	public Session newSession() {
-		Connection conn = null;
+	public Session newSession() throws SQLException {
 		String url = urlBuilder.buildURL(props);
-		try {
-			conn = DriverManager.getConnection(url, props.getProperty(PropertyNames.USERNAME), props.getProperty(PropertyNames.PASSWORD));
-		} catch(SQLException e) {
-			System.out.println("Could not create connection to database");
-			e.printStackTrace();
-		}
+		Connection conn = DriverManager.getConnection(url, props.getProperty(PropertyNames.USERNAME), props.getProperty(PropertyNames.PASSWORD));
+
 		return new Session(conn);
 
 	}
