@@ -1,2 +1,2 @@
 # rb-orm
-Simple ORM for fun and games
+Simple ORM for fun and games.
