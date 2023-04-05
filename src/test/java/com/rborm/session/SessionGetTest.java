@@ -90,12 +90,5 @@ public class SessionGetTest {
 	public void testGetNullResult() {
 		assertNull(session.get(Account.class, 0));
 	}
-	
-	
-	
-	
-	
-	
-	
 
 }

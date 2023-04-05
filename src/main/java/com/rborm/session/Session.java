@@ -3,13 +3,20 @@ package com.rborm.session;
 import java.lang.annotation.Annotation;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.UUID;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
 import java.util.HashMap;
+import java.util.Iterator;
 
 import com.rborm.annotations.*;
 import com.rborm.exceptions.ClassNotMappedException;
@@ -32,7 +39,7 @@ public class Session {
 	
 	// get object by ID
 	public <T, K> T get(Class<T> clazz,  K id) {
-		validate(clazz, id);
+		validate(clazz);
 		
 		T resultObj = null;
 		try {
@@ -44,6 +51,13 @@ public class Session {
 		// get a list of annotated fields, which includes those of all superclasses
 		Field idField = findAnnotatedFields(clazz, Id.class).values().toArray(new Field[10])[0];
 		Map<String, Field> fields = findAnnotatedFields(clazz, Column.class);
+		
+		// Ensure given Id type matches @Id-annotated field type. If field type is primitive, wrap it first.
+		Class<?> idFieldType = idField.getType();
+		if (idFieldType.isPrimitive())
+			idFieldType = MethodType.methodType(idFieldType).wrap().returnType();
+		if (idFieldType != id.getClass())
+			throw new IllegalArgumentException(idField.getName() + " is of type " + idFieldType + ", but the provided ID value is " + id.getClass());
 		
 		// Create SQL query
 		Mapped mappedAnnotation = clazz.getAnnotation(Mapped.class);
@@ -104,17 +118,64 @@ public class Session {
 	}
 	
 	// save object to data store
-	public void save(Object obj) {
+	public <T> void save(T obj) {
+		validate(obj.getClass());
 		
+		// recursively save Foreign key objects first to preserve referential integrity
+		Map<String, Field> foreignKeys = findAnnotatedFields(obj.getClass(), ForeignKey.class);
+		for(Entry<String, Field> e : foreignKeys.entrySet())
+			try {
+				save(e.getValue().get(obj));
+			} catch (Exception e1) {
+				System.out.println("Could not save foreign key " + e.getKey() + " of class " + obj.getClass());
+				e1.printStackTrace();
+			}
+		
+		Mapped mappedAnnotation = obj.getClass().getAnnotation(Mapped.class);
+		String tableName = mappedAnnotation.table().equals("") ? obj.getClass().getSimpleName().toLowerCase() : mappedAnnotation.table();
+		
+		String[] queryAndFields = insertQueryBuilder(tableName, obj);
+		
+		PreparedStatement stmt = null;
+		try {
+			stmt = conn.prepareStatement(queryAndFields[0]);
+			String[] orderedFields = queryAndFields[1].split(",");
+			for (int i = 1; i <= orderedFields.length; ++i) {
+				String fieldName = orderedFields[i-1];
+				Field field = obj.getClass().getDeclaredField(fieldName);
+				field.setAccessible(true);
+				// if the field is a FK / reference to a foreign object, get that objects @Id and save that instead
+				if (obj.getClass().getDeclaredField(fieldName).isAnnotationPresent(ForeignKey.class)) {
+					Field foreignIdField = findAnnotatedFields(field.getType(), Id.class).values().toArray(new Field[10])[0]; // @Id-annotated field of foreign class
+					foreignIdField.setAccessible(true);
+					var foreignObj = field.get(obj);
+					stmt.setObject(i, foreignIdField.get(foreignObj));
+				} else
+					stmt.setObject(i, field.get(obj));
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		
+		if (this.tx != null)
+			tx.addStatement(stmt);
+		else
+			try {
+				if (stmt != null)
+					stmt.execute();
+			} catch (SQLException e) {
+				System.out.println("Could not save " + obj + " (no transaction)");
+				e.printStackTrace();
+			}
 	}
 	
 	// update object in data store
-	public void update(Object obj) {
+	public <T> void update(T obj) {
 		
 	}
 	
 	// removed object from persistent data store
-	public void delete(Object obj) {
+	public <T> void delete(T obj) {
 		
 	}
 	
@@ -134,7 +195,7 @@ public class Session {
 		this.tx = null;
 	}
 	
-	private <T, K> boolean validate(Class<T> clazz, K id) {
+	private <T, K> boolean validate(Class<T> clazz) {
 		// Ensure class is flagged to be mapped to the database in the first place.
 		if (clazz.getAnnotation(Mapped.class) == null)
 			throw new ClassNotMappedException("Class " + clazz.getSimpleName() + " is not annotated with the @Mapped annotation");
@@ -145,16 +206,27 @@ public class Session {
 			throw new MappingException("Class " + clazz.getSimpleName() + " has no @Id annotation.");
 		if (idFields.size() > 1)
 			throw new MappingException("Class " + clazz.getSimpleName() + " has too many @Id annotations. Composite keys are not supported at this time.");
-		Field idField = idFields.values().toArray(new Field[10])[0];
-		
-		// Ensure given Id type matches @Id-annotated field type. If field type is primitive, wrap it.
-		Class<?> idFieldType = idField.getType();
-		if (idFieldType.isPrimitive())
-			idFieldType = MethodType.methodType(idFieldType).wrap().returnType();
-		if (idFieldType != id.getClass())
-			throw new IllegalArgumentException(idField.getName() + " is of type " + idFieldType + ", but the provided ID value is " + id.getClass());
-		
+
 		return true;
+	}
+	
+	private Map<String,Field> findAnnotatedFields(Class<?> clazz, Class<? extends Annotation> annotation) {
+		Map<String,Field> fields = new HashMap<>();
+		Class<?> c = clazz;
+		while(c != null && c != Object.class) {
+			for (Field f : c.getDeclaredFields()) {
+				f.setAccessible(true);
+				if (f.isAnnotationPresent(annotation))
+					if (f.isAnnotationPresent(Column.class)) {
+						String fieldName = f.getAnnotation(Column.class).name().equals("") ? f.getName().toLowerCase() : f.getAnnotation(Column.class).name();
+						fields.put(fieldName, f);
+					} else
+						fields.put(f.getName(), f);
+			}
+			c = c.getSuperclass();
+		}
+		
+		return fields;
 	}
 	
 	private <T> String selectQueryBuilder(String tableName, Map<String, Field> fields, Field idField, T id) {
@@ -178,23 +250,36 @@ public class Session {
 		return query.toString();
 	}
 	
-	private Map<String,Field> findAnnotatedFields(Class<?> clazz, Class<? extends Annotation> annotation) {
-		Map<String,Field> fields = new HashMap<>();
-		Class<?> c = clazz;
-		while(c != null && c != Object.class) {
-			for (Field f : c.getDeclaredFields()) {
-				f.setAccessible(true);
-				if (f.isAnnotationPresent(annotation))
-					if (f.isAnnotationPresent(Column.class)) {
-						String fieldName = f.getAnnotation(Column.class).name().equals("") ? f.getName().toLowerCase() : f.getAnnotation(Column.class).name();
-						fields.put(fieldName, f);
-					} else
-						fields.put(f.getName(), f);
-			}
-			c = c.getSuperclass();
-		}
+	// Builds a SQL INSERT query for all @Column-annotated fields of an object. Returns a 2-element array,
+	// where the first element is the query and the second element is a comma-delimited list of field names
+	// in the order that they are listed in the query.
+	private <T> String[] insertQueryBuilder(String tableName, T obj) {
+		StringBuilder query = new StringBuilder("INSERT INTO ");
+		StringBuilder colComponent = new StringBuilder(tableName+"(");
+		StringBuilder valComponent = new StringBuilder("VALUES(");
+		StringBuilder orderedFieldList = new StringBuilder();
 		
-		return fields;
+		Set<Entry<String,Field>> entries = findAnnotatedFields(obj.getClass(), Column.class).entrySet();
+		Iterator<Entry<String, Field>> iter = entries.iterator();
+		for (int i = 0; i < entries.size(); i++) {
+			Entry<String, Field> e = iter.next();
+			colComponent.append(e.getKey());
+			valComponent.append("?");
+			orderedFieldList.append(e.getValue().getName());
+			
+			if(i != entries.size()-1) {
+				colComponent.append(",");
+				valComponent.append(",");
+				orderedFieldList.append(",");
+			}
+		}
+		colComponent.append(")");
+		valComponent.append(")");
+		query.append(colComponent);
+		query.append(valComponent);
+		
+		String[] out = {query.toString(), orderedFieldList.toString()};
+		return out;
 	}
 
 }
