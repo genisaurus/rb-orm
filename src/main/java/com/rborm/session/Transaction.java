@@ -38,14 +38,14 @@ class Transaction {
 		this.stmts.add(stmt);
 	}
 	
-	public void commit() {
+	public void commit() throws SQLException {
 		for(PreparedStatement stmt : stmts)
 			try {
 				stmt.execute();
 			} catch (SQLException e) {
 				System.out.println("Statement \"" + stmt.toString() + "\" could not be executed, rolling transaction back");
 				rollback();
-				break;
+				throw e;
 			}
 		try {
 			txCommitStmt.execute();
@@ -53,6 +53,7 @@ class Transaction {
 			System.out.println("Could not commit transaction, rolling transaction back");
 			e.printStackTrace();
 			rollback();
+			throw e;
 		}
 		this.wasCommitted = true;
 		close();

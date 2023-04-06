@@ -112,5 +112,14 @@ public class SessionDeleteTest {
 		Apartment apt = new Apartment(101, "poor");
 		assertThrows(SQLException.class, () -> session.delete(apt)); 
 	}
+	
+	@Test
+	public void testDeleteById() throws SQLException {
+		conn.createStatement().execute("INSERT INTO accounts VALUES(1, 'test_user')");
+		session.delete(Account.class, 1);
+		ResultSet rs = conn.createStatement().executeQuery("SELECT count(*) FROM accounts");
+		rs.next();
+		assertEquals(0, rs.getInt(1));
+	}
 
 }

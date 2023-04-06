@@ -19,6 +19,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 
 import com.rborm.annotations.*;
+import com.rborm.database.QueryBuilder;
 import com.rborm.exceptions.ClassNotMappedException;
 import com.rborm.exceptions.MappingException;
 
@@ -39,7 +40,7 @@ public class Session {
 
 	// get object by ID
 	public <T, K> T get(Class<T> clazz, K id) {
-		validate(clazz);
+		AnnotationUtils.validate(clazz);
 
 		T resultObj = null;
 		try {
@@ -49,8 +50,8 @@ public class Session {
 		}
 
 		// get a list of annotated fields, which includes those of all superclasses
-		Field idField = findAnnotatedFields(clazz, Id.class).values().toArray(new Field[10])[0];
-		Map<String, Field> fields = findAnnotatedFields(clazz, Column.class);
+		Field idField = AnnotationUtils.findAnnotatedFields(clazz, Id.class).get(0);
+		List<Field> colFields = AnnotationUtils.findAnnotatedFields(clazz, Column.class);
 
 		// Ensure given Id type matches @Id-annotated field type. If field type is primitive, wrap it first.
 		Class<?> idFieldType = idField.getType();
@@ -61,40 +62,32 @@ public class Session {
 					+ ", but the provided ID value is " + id.getClass());
 
 		// Create SQL query
-		Mapped mappedAnnotation = clazz.getAnnotation(Mapped.class);
-		String tableName = mappedAnnotation.table().equals("") 
-				? clazz.getSimpleName().toLowerCase()
-				: mappedAnnotation.table();
-		String query = selectQueryBuilder(tableName, fields, idField, id);
+		String query = QueryBuilder.selectOne(clazz);
 
 		try {
 			PreparedStatement stmt = conn.prepareStatement(query);
-			if (id instanceof UUID)
-				stmt.setObject(1, (UUID) id);
-			else if (id instanceof Integer)
-				stmt.setInt(1, ((Integer) id).intValue());
-
+			stmt.setObject(1, id);
+			
 			// if the ResultSet is empty, return null
 			ResultSet rs = stmt.executeQuery();
 			if (!rs.first())
 				return null;
 
 			// programmatically invoke setters for every field...
-			for (Map.Entry<String, Field> e : fields.entrySet()) {
-				String fieldName = e.getKey();
-				Field field = e.getValue();
+			for (Field col : colFields) {
+				String fieldName = AnnotationUtils.findColumnName(col);
 				Object databaseValue = rs.getObject(fieldName);
 				// capitalize the first letter of the field name to append after set___ (foo -> setFoo)
 				String setterName = (new StringBuilder("set"))
-						.append(field.getName().substring(0, 1).toUpperCase() + field.getName().substring(1))
+						.append(col.getName().substring(0, 1).toUpperCase() + col.getName().substring(1))
 						.toString();
 
 				// for legibility, get a shorthand to the field type for finding the setter and invoking it with a parameter
-				Class<?> paramType = field.getType();
+				Class<?> paramType = col.getType();
 				// if the field is a foreign key, we need to invoke the setter with the full referenced object.
-				if (field.isAnnotationPresent(ForeignKey.class) && databaseValue != null) {
+				if (col.isAnnotationPresent(ForeignKey.class) && databaseValue != null) {
 					// @Id-annotated field of foreign class
-					Field foreignIdField = findAnnotatedFields(paramType, Id.class).values().toArray(new Field[10])[0]; 
+					Field foreignIdField = AnnotationUtils.findAnnotatedFields(paramType, Id.class).get(0); 
 					// if the foreign class' @Id field is primitive, we need to wrap it for Session.get(), as it will not autobox
 					Class<?> wrapper = foreignIdField.getType().isPrimitive()
 							? MethodType.methodType(foreignIdField.getType()).wrap().returnType()
@@ -120,27 +113,96 @@ public class Session {
 
 		return resultObj;
 	}
+	
+	public <T> List<T> getAll(Class<T> clazz) {
+		List<T> results = new ArrayList<>();
+		
+		AnnotationUtils.validate(clazz);
+
+		// get a list of annotated fields, which includes those of all superclasses
+		Field idField = AnnotationUtils.findAnnotatedFields(clazz, Id.class).get(0);
+		List<Field> colFields = AnnotationUtils.findAnnotatedFields(clazz, Column.class);
+
+		// Ensure given Id type matches @Id-annotated field type. If field type is primitive, wrap it first.
+		Class<?> idFieldType = idField.getType();
+		if (idFieldType.isPrimitive())
+			idFieldType = MethodType.methodType(idFieldType).wrap().returnType();
+
+		// Create SQL query
+		String query = QueryBuilder.selectAll(clazz);
+
+		try {
+			PreparedStatement stmt = conn.prepareStatement(query);
+			
+			// if the ResultSet is empty, return null
+			ResultSet rs = stmt.executeQuery();
+			while(rs.next()) {
+			
+				T resultObj = null;
+				try {
+					resultObj = clazz.getDeclaredConstructor().newInstance();
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+	
+				// programmatically invoke setters for every field...
+				for (Field col : colFields) {
+					String fieldName = AnnotationUtils.findColumnName(col);
+					Object databaseValue = rs.getObject(fieldName);
+					// capitalize the first letter of the field name to append after set___ (foo -> setFoo)
+					String setterName = (new StringBuilder("set"))
+							.append(col.getName().substring(0, 1).toUpperCase() + col.getName().substring(1))
+							.toString();
+	
+					// for legibility, get a shorthand to the field type for finding the setter and invoking it with a parameter
+					Class<?> paramType = col.getType();
+					// if the field is a foreign key, we need to invoke the setter with the full referenced object.
+					if (col.isAnnotationPresent(ForeignKey.class) && databaseValue != null) {
+						// @Id-annotated field of foreign class
+						Field foreignIdField = AnnotationUtils.findAnnotatedFields(paramType, Id.class).get(0); 
+						// if the foreign class' @Id field is primitive, we need to wrap it for Session.get(), as it will not autobox
+						Class<?> wrapper = foreignIdField.getType().isPrimitive()
+								? MethodType.methodType(foreignIdField.getType()).wrap().returnType()
+								: foreignIdField.getType();
+						// the databaseValue for this field should be the PK value
+						var foreignObj = this.get(paramType, wrapper.cast(databaseValue));
+						try {
+							resultObj.getClass().getMethod(setterName, paramType).invoke(resultObj,
+									paramType.cast(foreignObj));
+						} catch (Exception e1) {
+							e1.printStackTrace();
+						}
+					} else
+						try {
+							resultObj.getClass().getMethod(setterName, paramType).invoke(resultObj, databaseValue);
+						} catch (Exception e1) {
+							e1.printStackTrace();
+						}
+				}
+				results.add(resultObj);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		
+		return results;
+	}
 
 	// save object to data store
-	public <T> void save(T obj) {
-		validate(obj.getClass());
+	public <T> void save(T obj) throws SQLException {
+		AnnotationUtils.validate(obj.getClass());
 
 		// recursively save Foreign key objects first to preserve referential integrity
-		Map<String, Field> foreignKeys = findAnnotatedFields(obj.getClass(), ForeignKey.class);
-		for (Entry<String, Field> e : foreignKeys.entrySet())
+		List<Field> foreignKeys = AnnotationUtils.findAnnotatedFields(obj.getClass(), ForeignKey.class);
+		for (Field fk : foreignKeys)
 			try {
-				save(e.getValue().get(obj));
+				save(fk.get(obj));
 			} catch (Exception e1) {
-				System.out.println("Could not save foreign key " + e.getKey() + " of class " + obj.getClass());
+				System.out.println("Could not save foreign key " + AnnotationUtils.findColumnName(fk) + " of class " + obj.getClass());
 				e1.printStackTrace();
 			}
 
-		Mapped mappedAnnotation = obj.getClass().getAnnotation(Mapped.class);
-		String tableName = mappedAnnotation.table().equals("") 
-				? obj.getClass().getSimpleName().toLowerCase()
-				: mappedAnnotation.table();
-
-		String[] queryAndFields = insertQueryBuilder(tableName, obj);
+		String[] queryAndFields = QueryBuilder.insert(obj.getClass());
 
 		PreparedStatement stmt = null;
 		try {
@@ -153,8 +215,7 @@ public class Session {
 				// if the field is a FK / reference to a foreign object, get that objects @Id
 				// and save that instead
 				if (obj.getClass().getDeclaredField(fieldName).isAnnotationPresent(ForeignKey.class)) {
-					Field foreignIdField = findAnnotatedFields(field.getType(), Id.class).values()
-							.toArray(new Field[10])[0]; // @Id-annotated field of foreign class
+					Field foreignIdField = AnnotationUtils.findAnnotatedFields(field.getType(), Id.class).get(0);
 					foreignIdField.setAccessible(true);
 					var foreignObj = field.get(obj);
 					stmt.setObject(i, foreignIdField.get(foreignObj));
@@ -173,30 +234,25 @@ public class Session {
 					stmt.execute();
 			} catch (SQLException e) {
 				System.out.println("Could not save " + obj + " (no transaction)");
-				e.printStackTrace();
+				throw e;
 			}
 	}
 
 	// update object in data store
-	public <T> void update(T obj) {
-		validate(obj.getClass());
+	public <T> void update(T obj) throws SQLException {
+		AnnotationUtils.validate(obj.getClass());
 
 		// recursively update Foreign key objects first to preserve referential integrity
-		Map<String, Field> foreignKeys = findAnnotatedFields(obj.getClass(), ForeignKey.class);
-		for (Entry<String, Field> e : foreignKeys.entrySet())
+		List<Field> foreignKeys = AnnotationUtils.findAnnotatedFields(obj.getClass(), ForeignKey.class);
+		for (Field fk : foreignKeys)
 			try {
-				update(e.getValue().get(obj));
+				update(fk.get(obj));
 			} catch (Exception e1) {
-				System.out.println("Could not save foreign key " + e.getKey() + " of class " + obj.getClass());
+				System.out.println("Could not save foreign key " + AnnotationUtils.findColumnName(fk) + " of class " + obj.getClass());
 				e1.printStackTrace();
 			}
 
-		Mapped mappedAnnotation = obj.getClass().getAnnotation(Mapped.class);
-		String tableName = mappedAnnotation.table().equals("") 
-				? obj.getClass().getSimpleName().toLowerCase()
-				: mappedAnnotation.table();
-
-		String[] queryAndFields = updateQueryBuilder(tableName, obj);
+		String[] queryAndFields = QueryBuilder.update(obj.getClass());
 
 		PreparedStatement stmt = null;
 		try {
@@ -209,8 +265,7 @@ public class Session {
 				// if the field is a FK / reference to a foreign object, get that objects @Id
 				// and save that instead
 				if (obj.getClass().getDeclaredField(fieldName).isAnnotationPresent(ForeignKey.class)) {
-					Field foreignIdField = findAnnotatedFields(field.getType(), Id.class).values()
-							.toArray(new Field[10])[0]; // @Id-annotated field of foreign class
+					Field foreignIdField = AnnotationUtils.findAnnotatedFields(field.getType(), Id.class).get(0);
 					foreignIdField.setAccessible(true);
 					var foreignObj = field.get(obj);
 					stmt.setObject(i, foreignIdField.get(foreignObj));
@@ -229,25 +284,20 @@ public class Session {
 					stmt.execute();
 			} catch (SQLException e) {
 				System.out.println("Could not update " + obj + " (no transaction)");
-				e.printStackTrace();
+				throw e;
 			}
 	}
 
 	// removed object from persistent data store
 	public <T> void delete(T obj) throws SQLException {
-		validate(obj.getClass());
+		AnnotationUtils.validate(obj.getClass());
 
-		Mapped mappedAnnotation = obj.getClass().getAnnotation(Mapped.class);
-		String tableName = mappedAnnotation.table().equals("") 
-				? obj.getClass().getSimpleName().toLowerCase()
-				: mappedAnnotation.table();
-
-		String query = deleteQueryBuilder(tableName, obj);
+		String query = QueryBuilder.delete(obj.getClass());
 
 		PreparedStatement stmt = null;
 		try {
 			stmt = conn.prepareStatement(query);
-			Field id = findAnnotatedFields(obj.getClass(), Id.class).values().toArray(new Field[10])[0];
+			Field id = AnnotationUtils.findAnnotatedFields(obj.getClass(), Id.class).get(0);
 			stmt.setObject(1, id.get(obj));
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -258,6 +308,27 @@ public class Session {
 		else
 			// preserving SQLException throw in case of cascade error
 			stmt.execute();
+	}
+	
+	public <T> void delete(Class<?> clazz, T id) throws SQLException {
+		AnnotationUtils.validate(clazz);
+		
+		String query = QueryBuilder.delete(clazz);
+		
+		PreparedStatement stmt = null;
+		try {
+			stmt = conn.prepareStatement(query);
+			stmt.setObject(1, id);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		if (this.tx != null)
+			tx.addStatement(stmt);
+		else
+			// preserving SQLException throw in case of cascade error
+			stmt.execute();
+		
 	}
 
 	public void close() {
@@ -274,135 +345,6 @@ public class Session {
 
 	void txNotifyClosed() {
 		this.tx = null;
-	}
-
-	private <T, K> boolean validate(Class<T> clazz) {
-		// Ensure class is flagged to be mapped to the database in the first place.
-		if (clazz.getAnnotation(Mapped.class) == null)
-			throw new ClassNotMappedException(
-					"Class " + clazz.getSimpleName() + " is not annotated with the @Mapped annotation");
-
-		// Ensure there is only one @Id annotated field.
-		Map<String, Field> idFields = findAnnotatedFields(clazz, Id.class);
-		if (idFields.size() == 0)
-			throw new MappingException("Class " + clazz.getSimpleName() + " has no @Id annotation.");
-		if (idFields.size() > 1)
-			throw new MappingException("Class " + clazz.getSimpleName()
-					+ " has too many @Id annotations. Composite keys are not supported at this time.");
-
-		return true;
-	}
-
-	private Map<String, Field> findAnnotatedFields(Class<?> clazz, Class<? extends Annotation> annotation) {
-		Map<String, Field> fields = new HashMap<>();
-		Class<?> c = clazz;
-		while (c != null && c != Object.class) {
-			for (Field f : c.getDeclaredFields()) {
-				f.setAccessible(true);
-				if (f.isAnnotationPresent(annotation))
-					if (f.isAnnotationPresent(Column.class)) {
-						String fieldName = f.getAnnotation(Column.class).name().equals("") ? f.getName().toLowerCase()
-								: f.getAnnotation(Column.class).name();
-						fields.put(fieldName, f);
-					} else
-						fields.put(f.getName(), f);
-			}
-			c = c.getSuperclass();
-		}
-
-		return fields;
-	}
-
-	private <T> String selectQueryBuilder(String tableName, Map<String, Field> fields, Field idField, T id) {
-		StringBuilder query = new StringBuilder("SELECT ");
-		int fieldCount = 0;
-		for (String fieldName : fields.keySet()) {
-			query.append(fieldName);
-			if (fieldCount < fields.size() - 1)
-				query.append(", ");
-			++fieldCount;
-		}
-		query.append(" FROM ");
-		query.append(tableName);
-
-		query.append(" WHERE ");
-		String name = idField.getAnnotation(Column.class).name().equals("") ? idField.getName().toLowerCase()
-				: idField.getAnnotation(Column.class).name();
-		query.append(name + "=?");
-
-		query.append(";");
-
-		return query.toString();
-	}
-
-	// Builds a SQL INSERT query for all @Column-annotated fields of an object.
-	// Returns a 2-element array,
-	// where the first element is the query and the second element is a
-	// comma-delimited list of field names
-	// in the order that they are listed in the query.
-	private <T> String[] insertQueryBuilder(String tableName, T obj) {
-		StringBuilder query = new StringBuilder("INSERT INTO ");
-		StringBuilder colComponent = new StringBuilder(tableName + "(");
-		StringBuilder valComponent = new StringBuilder("VALUES(");
-		StringBuilder orderedFieldList = new StringBuilder();
-
-		Set<Entry<String, Field>> entries = findAnnotatedFields(obj.getClass(), Column.class).entrySet();
-		Iterator<Entry<String, Field>> iter = entries.iterator();
-		for (int i = 0; i < entries.size(); i++) {
-			Entry<String, Field> e = iter.next();
-			colComponent.append(e.getKey());
-			valComponent.append("?");
-			orderedFieldList.append(e.getValue().getName());
-
-			if (i != entries.size() - 1) {
-				colComponent.append(",");
-				valComponent.append(",");
-				orderedFieldList.append(",");
-			}
-		}
-		colComponent.append(")");
-		valComponent.append(")");
-		query.append(colComponent);
-		query.append(valComponent);
-
-		String[] out = { query.toString(), orderedFieldList.toString() };
-		return out;
-	}
-
-	// Builds a SQL UPDATE query for all @Column-annotated fields of an object.
-	// Returns a 2-element array, where the first element is the query and the
-	// second element is a comma-delimited list of field names in the order
-	// that they are listed in the query.
-	private <T> String[] updateQueryBuilder(String tableName, T obj) {
-		StringBuilder query = new StringBuilder("UPDATE " + tableName + " SET ");
-		StringBuilder orderedFieldList = new StringBuilder();
-
-		Set<Entry<String, Field>> entries = findAnnotatedFields(obj.getClass(), Column.class).entrySet();
-		Iterator<Entry<String, Field>> iter = entries.iterator();
-		for (int i = 0; i < entries.size(); i++) {
-			Entry<String, Field> e = iter.next();
-			query.append(e.getKey() + "=?");
-			orderedFieldList.append(e.getValue().getName());
-
-			if (i != entries.size() - 1) {
-				query.append(",");
-				orderedFieldList.append(",");
-			}
-		}
-		Entry<String, Field> id = findAnnotatedFields(obj.getClass(), Id.class).entrySet().iterator().next();
-		query.append(" WHERE " + id.getKey() + "=?;");
-		orderedFieldList.append(","+id.getValue().getName());
-		
-		String[] out = { query.toString(), orderedFieldList.toString() };
-		return out;
-	}
-	
-	private <T> String deleteQueryBuilder(String tableName, T obj) {
-		StringBuilder query = new StringBuilder("DELETE FROM " + tableName + " WHERE ");
-		Entry<String, Field> id = findAnnotatedFields(obj.getClass(), Id.class).entrySet().iterator().next();
-		query.append(id.getKey() + "=?;");
-
-		return query.toString();
 	}
 
 }

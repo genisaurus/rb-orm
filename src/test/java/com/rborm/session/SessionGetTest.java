@@ -1,5 +1,7 @@
 package com.rborm.session;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
@@ -8,8 +10,10 @@ import java.lang.reflect.InvocationTargetException;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.util.List;
 import java.util.UUID;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -56,10 +60,18 @@ public class SessionGetTest {
 		conn.createStatement().execute(createResidents);
 		
 		conn.createStatement().execute("INSERT INTO accounts VALUES(1, 'test_user')");
+		conn.createStatement().execute("INSERT INTO accounts VALUES(2, 'other_test_user')");
 		conn.createStatement().execute("INSERT INTO apartments VALUES(101, 'poor')");
 		conn.createStatement().execute("INSERT INTO residents VALUES(X'7000c33195884cceaeec56eefc10dca2', 'Jane Doe', 101)");
 		conn.createStatement().execute("INSERT INTO residents VALUES(X'86bc3db7cff04445902d5f23eb50626e', 'John Smith', null)");
 				
+	}
+	
+	@AfterAll
+	public static void cleanup() throws SQLException {
+		conn.createStatement().execute("DELETE FROM accounts");
+		conn.createStatement().execute("DELETE FROM residents");
+		conn.createStatement().execute("DELETE FROM apartments");
 	}
 	
 	@Test
@@ -89,6 +101,17 @@ public class SessionGetTest {
 	@Test
 	public void testGetNullResult() {
 		assertNull(session.get(Account.class, 0));
+	}
+	
+	@Test
+	public void testGetAll() {
+		Account acct1 = new Account(1, "test_user");
+		Account acct2 = new Account(2, "other_test_user");
+		List<Account> accts = session.getAll(Account.class);
+		assertAll(
+				() -> assertTrue(accts.contains(acct1)),
+				() -> assertTrue(accts.contains(acct2)));
+		
 	}
 
 }

@@ -70,7 +70,7 @@ public class SessionSaveTest {
 		session.save(test);
 		ResultSet rs = conn.createStatement().executeQuery("SELECT * FROM accounts WHERE account_id=1");
 		rs.next();
-		assertEquals(rs.getString(2), "test_user");
+		assertEquals("test_user", rs.getString(2));
 	}
 	
 	@Test 
@@ -81,7 +81,7 @@ public class SessionSaveTest {
 		tx.commit();
 		ResultSet rs = conn.createStatement().executeQuery("SELECT * FROM accounts WHERE account_id=1");
 		rs.next();
-		assertEquals(rs.getString(2), "test_user");
+		assertEquals("test_user", rs.getString(2));
 	}
 	
 	@Test
@@ -95,8 +95,8 @@ public class SessionSaveTest {
 		ResultSet rs2 = conn.createStatement().executeQuery("SELECT * FROM residents WHERE name='Jane Doe'");
 		rs2.next();
 		assertAll(
-				() -> assertEquals(rs1.getString(2), "poor"), 
-				() -> assertEquals(rs2.getInt(3), 101));
+				() -> assertEquals("poor", rs1.getString(2)), 
+				() -> assertEquals(101, rs2.getInt(3)));
 	}
 	
 	@Test
@@ -112,8 +112,8 @@ public class SessionSaveTest {
 		ResultSet rs2 = conn.createStatement().executeQuery("SELECT * FROM residents WHERE name='Jane Doe'");
 		rs2.next();
 		assertAll(
-				() -> assertEquals(rs1.getString(2), "poor"), 
-				() -> assertEquals(rs2.getInt(3), 101));
+				() -> assertEquals("poor", rs1.getString(2)), 
+				() -> assertEquals(101, rs2.getInt(3)));
 	}
 
 }
