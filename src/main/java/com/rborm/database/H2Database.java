@@ -16,8 +16,6 @@ public class H2Database implements URLBuilder {
 
 	@Override
 	public String buildURL(Properties props) {
-		System.out.println(props);
-		System.out.println(props.getProperty(PropertyNames.URL));
 		return "jdbc:h2:" + props.getProperty(PropertyNames.URL) + ":" + props.getProperty(PropertyNames.DB_NAME);
 	}
 

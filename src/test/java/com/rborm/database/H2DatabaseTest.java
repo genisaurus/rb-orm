@@ -25,8 +25,6 @@ public class H2DatabaseTest {
 	@Test
 	public void testBuildURL() {
 		H2Database db = new H2Database();
-		System.out.println(h2Props);
-		System.out.println(h2Props.getProperty(PropertyNames.URL));
 		assertEquals("jdbc:h2:mem:internal", db.buildURL(h2Props));
 	}
 
