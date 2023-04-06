@@ -1,35 +1,32 @@
 package com.rborm.session;
 
-import java.lang.annotation.Annotation;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.UUID;
 import java.util.List;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Set;
 import java.util.HashMap;
-import java.util.Iterator;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.ArrayList;
 
 import com.rborm.annotations.*;
 import com.rborm.database.QueryBuilder;
-import com.rborm.exceptions.ClassNotMappedException;
-import com.rborm.exceptions.MappingException;
 
 public class Session {
 
 	Connection conn;
 	private Transaction tx;
+	private Cache cache;
+	private boolean useCache;
 
 	Session(Connection conn) {
 		this.conn = conn;
+		this.cache = new Cache();
+		this.useCache = false;
 	}
 
 	public Transaction beginTransaction() {
@@ -41,6 +38,10 @@ public class Session {
 	// get object by ID
 	public <T, K> T get(Class<T> clazz, K id) {
 		AnnotationUtils.validate(clazz);
+		
+		if (useCache)
+			if (cache.contains(clazz, id))
+				return cache.get(clazz, id);
 
 		T resultObj = null;
 		try {
@@ -110,7 +111,7 @@ public class Session {
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
-
+		cache.add(resultObj);
 		return resultObj;
 	}
 	
@@ -179,6 +180,7 @@ public class Session {
 							e1.printStackTrace();
 						}
 				}
+				cache.add(resultObj);
 				results.add(resultObj);
 			}
 		} catch (Exception e) {
@@ -191,6 +193,8 @@ public class Session {
 	// save object to data store
 	public <T> void save(T obj) throws SQLException {
 		AnnotationUtils.validate(obj.getClass());
+		
+		cache.add(obj);
 
 		// recursively save Foreign key objects first to preserve referential integrity
 		List<Field> foreignKeys = AnnotationUtils.findAnnotatedFields(obj.getClass(), ForeignKey.class);
@@ -247,7 +251,7 @@ public class Session {
 		for (Field fk : foreignKeys)
 			try {
 				update(fk.get(obj));
-			} catch (Exception e1) {
+			} catch (IllegalAccessException e1) {
 				System.out.println("Could not save foreign key " + AnnotationUtils.findColumnName(fk) + " of class " + obj.getClass());
 				e1.printStackTrace();
 			}
@@ -292,6 +296,9 @@ public class Session {
 	public <T> void delete(T obj) throws SQLException {
 		AnnotationUtils.validate(obj.getClass());
 
+		if (useCache)
+			cache.detach(obj);
+		
 		String query = QueryBuilder.delete(obj.getClass());
 
 		PreparedStatement stmt = null;
@@ -313,6 +320,9 @@ public class Session {
 	public <T> void delete(Class<?> clazz, T id) throws SQLException {
 		AnnotationUtils.validate(clazz);
 		
+		if (useCache)
+			cache.detach(clazz, id);
+		
 		String query = QueryBuilder.delete(clazz);
 		
 		PreparedStatement stmt = null;
@@ -330,6 +340,10 @@ public class Session {
 			stmt.execute();
 		
 	}
+	
+	public void useCache(boolean useCache) {
+		this.useCache = useCache;
+	}
 
 	public void close() {
 		try {
@@ -346,5 +360,80 @@ public class Session {
 	void txNotifyClosed() {
 		this.tx = null;
 	}
+	
+	private class Cache {
+		private Map<Class<?>, Set<?>> cache;
+		
+		public Cache() {
+			this.cache = new HashMap<>();
+		}
+		
+		public <T> void add(T item) {
+			if (!this.cache.containsKey(item.getClass()))
+				this.cache.put(item.getClass(), new HashSet<T>());
+			
+			@SuppressWarnings("unchecked")
+			Set<T> items = (Set<T>) this.cache.get(item.getClass());
+			if (!items.contains(item))
+				items.add(item);
+		}
+		
+		public <T, K> T get(Class<T> clazz, K id) {
+			return findElementById(clazz, id);
+		}
+
+		public <T> void detach(T item) {
+			@SuppressWarnings("unchecked")
+			Set<T> items = (Set<T>) this.cache.get(item.getClass());
+			if (items != null)
+				items.remove(item);
+		}
+		
+		public <T,K> void detach(Class<T> clazz, K id) {
+			@SuppressWarnings("unchecked")
+			Set<T> items = (Set<T>) this.cache.get(clazz);
+			if (items != null)
+				items.remove(findElementById(clazz, id));
+		}
+		
+		public <T, K> boolean contains(Class<T> clazz, K id) {
+			@SuppressWarnings("unchecked")
+			Set<T> items = (Set<T>) this.cache.get(clazz);
+			if (items == null)
+				return false;
+			Field idField = AnnotationUtils.findAnnotatedFields(clazz, Id.class).get(0);
+			idField.setAccessible(true);
+			try {
+				for (Object item : items)
+					if (idField.get(item).equals(id))
+						return true;
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+			return false;
+		}
+		
+		public <T> boolean contains(T obj) {
+			@SuppressWarnings("unchecked")
+			Set<T> items = (Set<T>) this.cache.get(obj.getClass());
+			return items != null ? items.contains(obj) : false;
+		}
+		
+		private <T,K> T findElementById(Class<T> clazz, K id) {
+			Field idField = AnnotationUtils.findAnnotatedFields(clazz, Id.class).get(0);
+			@SuppressWarnings("unchecked")
+			Set<T> items = (Set<T>) this.cache.get(clazz);
+			try {
+				for (T item : items)
+					if (idField.get(item).equals(id))
+						return item;
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+			return null;
+		}
+		
+	}
+	
 
 }

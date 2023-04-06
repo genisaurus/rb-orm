@@ -59,7 +59,7 @@ class Transaction {
 		close();
 	}
 	
-	public void rollback() {
+	public void rollback(){
 		this.stmts = new ArrayList<>();
 		this.wasCommitted = false;
 		try {

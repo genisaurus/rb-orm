@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -20,44 +21,10 @@ import org.junit.jupiter.api.Test;
 import com.rborm.test.model.*;
 
 
-public class SessionGetTest {
-	
-	private static SessionFactory sf;
-	private static Session session;
-	private static Connection conn;
+public class SessionGetTest extends SessionTest {
 	
 	@BeforeAll
-	public static void configure() throws SQLException, NoSuchFieldException, SecurityException, IllegalArgumentException, IllegalAccessException {
-		try {
-			Class.forName("org.h2.Driver");
-		} catch (ClassNotFoundException e) {
-			e.printStackTrace();
-		}
-		conn = DriverManager.getConnection("jdbc:h2:mem:internal", "sa", "sa");
-		sf = new SessionFactory();
-		session = sf.newSession();
-
-		String createAccounts =
-				"CREATE TEMP TABLE IF NOT EXISTS accounts ("
-				+ "account_id INT NOT NULL, "
-				+ "username VARCHAR(50) NOT NULL,"
-				+ "PRIMARY KEY(account_id) ); ";
-		String createApartments = 
-				"CREATE TEMP TABLE IF NOT EXISTS apartments ("
-				+ "room INT NOT NULL,"
-				+ "condition VARCHAR(50) NOT NULL,"
-				+ "PRIMARY KEY(room) );";
-		String createResidents =
-				"CREATE TEMP TABLE IF NOT EXISTS residents ("
-				+ "uuid UUID NOT NULL,"
-				+ "name VARCHAR(50) NOT NULL,"
-				+ "apt INT,"
-				+ "FOREIGN KEY(apt) REFERENCES apartments(room),"
-				+ "PRIMARY KEY(uuid) );";
-		
-		conn.createStatement().execute(createAccounts);
-		conn.createStatement().execute(createApartments);
-		conn.createStatement().execute(createResidents);
+	public static void insertValues() throws SQLException, NoSuchFieldException, SecurityException, IllegalArgumentException, IllegalAccessException {
 		
 		conn.createStatement().execute("INSERT INTO accounts VALUES(1, 'test_user')");
 		conn.createStatement().execute("INSERT INTO accounts VALUES(2, 'other_test_user')");
@@ -112,6 +79,18 @@ public class SessionGetTest {
 				() -> assertTrue(accts.contains(acct1)),
 				() -> assertTrue(accts.contains(acct2)));
 		
+	}
+	
+	@Test
+	public void testCache() throws NoSuchFieldException, SecurityException, NoSuchMethodException, IllegalArgumentException, IllegalAccessException, InvocationTargetException {
+		Account acct = new Account(1, "test_user");
+		session.useCache(true);
+		session.get(Account.class, 1);
+		Field cache = session.getClass().getDeclaredField("cache");
+		cache.setAccessible(true);
+		Method cacheContains = cache.get(session).getClass().getDeclaredMethod("contains", Object.class);
+		cacheContains.setAccessible(true);
+		assertTrue((Boolean)cacheContains.invoke(cache.get(session), acct));
 	}
 
 }
