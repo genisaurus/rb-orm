@@ -62,7 +62,8 @@ public class Session {
 
 		// Create SQL query
 		Mapped mappedAnnotation = clazz.getAnnotation(Mapped.class);
-		String tableName = mappedAnnotation.table().equals("") ? clazz.getSimpleName().toLowerCase()
+		String tableName = mappedAnnotation.table().equals("") 
+				? clazz.getSimpleName().toLowerCase()
 				: mappedAnnotation.table();
 		String query = selectQueryBuilder(tableName, fields, idField, id);
 
@@ -135,7 +136,8 @@ public class Session {
 			}
 
 		Mapped mappedAnnotation = obj.getClass().getAnnotation(Mapped.class);
-		String tableName = mappedAnnotation.table().equals("") ? obj.getClass().getSimpleName().toLowerCase()
+		String tableName = mappedAnnotation.table().equals("") 
+				? obj.getClass().getSimpleName().toLowerCase()
 				: mappedAnnotation.table();
 
 		String[] queryAndFields = insertQueryBuilder(tableName, obj);
@@ -190,7 +192,8 @@ public class Session {
 			}
 
 		Mapped mappedAnnotation = obj.getClass().getAnnotation(Mapped.class);
-		String tableName = mappedAnnotation.table().equals("") ? obj.getClass().getSimpleName().toLowerCase()
+		String tableName = mappedAnnotation.table().equals("") 
+				? obj.getClass().getSimpleName().toLowerCase()
 				: mappedAnnotation.table();
 
 		String[] queryAndFields = updateQueryBuilder(tableName, obj);
@@ -231,8 +234,30 @@ public class Session {
 	}
 
 	// removed object from persistent data store
-	public <T> void delete(T obj) {
+	public <T> void delete(T obj) throws SQLException {
+		validate(obj.getClass());
 
+		Mapped mappedAnnotation = obj.getClass().getAnnotation(Mapped.class);
+		String tableName = mappedAnnotation.table().equals("") 
+				? obj.getClass().getSimpleName().toLowerCase()
+				: mappedAnnotation.table();
+
+		String query = deleteQueryBuilder(tableName, obj);
+
+		PreparedStatement stmt = null;
+		try {
+			stmt = conn.prepareStatement(query);
+			Field id = findAnnotatedFields(obj.getClass(), Id.class).values().toArray(new Field[10])[0];
+			stmt.setObject(1, id.get(obj));
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		if (this.tx != null)
+			tx.addStatement(stmt);
+		else
+			// preserving SQLException throw in case of cascade error
+			stmt.execute();
 	}
 
 	public void close() {
@@ -370,6 +395,14 @@ public class Session {
 		
 		String[] out = { query.toString(), orderedFieldList.toString() };
 		return out;
+	}
+	
+	private <T> String deleteQueryBuilder(String tableName, T obj) {
+		StringBuilder query = new StringBuilder("DELETE FROM " + tableName + " WHERE ");
+		Entry<String, Field> id = findAnnotatedFields(obj.getClass(), Id.class).entrySet().iterator().next();
+		query.append(id.getKey() + "=?;");
+
+		return query.toString();
 	}
 
 }
